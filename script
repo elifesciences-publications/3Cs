@@ -1,0 +1,187 @@
+from __future__ import division
+
+import logging
+import matplotlib.pyplot as plt
+import mmap
+import numpy
+import operator
+import re
+
+from collections import Counter
+from numpy import trapz
+from tqdm import tqdm
+
+
+def get_num_lines(myfile):
+    '''Return the number of lines in a file.'''
+
+    fp = open(myfile, "r+")
+    buf = mmap.mmap(fp.fileno(), 0)
+    lines = 0
+    while buf.readline():
+        lines += 1
+    return lines
+
+
+def is_tgw(seq):
+    '''Check whether a DNA sequence matches the TGW oligonucleotide pattern.'''
+
+    if len(seq) != 20:
+        return False
+    elif re.search(
+            r"([ACGT])([ACGT])([AGT])([ACGT])([ACGT])([ACGT])([ACGT])([ACGT])([ACT])([ACGT])([ACGT])([ACGT])([ACGT])([ACT])([AGT])([ACT])([ACGT])([ACG])([ACG])([AG])",
+            seq):
+        return True
+    else:
+        return False
+
+
+def is_otgw(seq):
+    '''Check whether a DNA sequence matches the optimized TGW oligonucleotide pattern.'''
+
+    if len(seq) != 17:
+        return False
+    elif re.search(
+            r"([ACGT])([ACGT])([ACGT])([ACGT])([ACGT])([ACT])([ACGT])([ACGT])([ACGT])([ACGT])([ACT])([AGT])([ACT])([ACGT])([ACG])([ACG])([AG])",
+            seq):
+        return True
+    else:
+        return False
+
+
+def check_tgw_pattern(cutadapt_output, output, count_dist_output, length, plot_file):
+    '''Determine the number of reads in a trimmed sequencing file that match the TGW oligonucleotide pattern.
+       Output is written to output, plots are written to plot_file, read counts are written to count_dist_output.
+    '''
+
+    logging.info("Counting pattern of length %d in %s" % (length, cutadapt_output))
+    distribution = Counter()
+
+    with open(cutadapt_output) as infile:
+        c = 1
+        for line in tqdm(infile, total=get_num_lines(cutadapt_output)):
+            if c == 1:
+                c += 1
+            elif c == 2:
+                guide = line.rstrip()[-length:]
+                if is_tgw(guide):
+                    distribution[guide] += 1
+                c += 1
+            elif c == 3:
+                c += 1
+            elif c == 4:
+                c = 1
+    valid_guides = len(distribution)
+    logging.info(" Writing %d entries to %s" % (valid_guides, output))
+
+    N = len(distribution)
+
+    z = sorted([distribution[i] for i in distribution], reverse=True)
+    x = [i / N for i in z]
+
+    S = sum(x)
+    data_normalized = [x[k] / S for k in range(N)]
+    y = list(numpy.cumsum(data_normalized))
+    for i in range(0, 10):
+        print z[i], x[i], data_normalized[i], y[i]
+    print "..."
+    for i in range(len(y) - 10, len(y)):
+        print z[i], x[i], data_normalized[i], y[i]
+
+    x_values = [i * (1.0 / N) for i in range(0, len(y))]
+    pdf_file = plt.figure()
+    auc = trapz(y, x_values)
+    logging.info("Area under the curve: %f", auc)
+    cv = numpy.std(z) / numpy.mean(z)
+    logging.info("Coefficient of variation: %f" % cv)
+
+    plt.scatter([x_values[::10000]], [y[::10000]], s=5)
+    plt.plot([x_values[::10000]], [y[::10000]], linestyle="-")
+    plt.title("title, AUC = %f" % auc)
+    plt.xlabel("gRNAs ranked by abundance")
+    plt.ylabel("cumulative fraction of NGS reads represented")
+    logging.info("saving plot ...")
+    pdf_file.savefig(plot_file)
+
+    logging.info(" Printing count distribution ...")
+    read_count_distribution = Counter()
+    for guide in distribution:
+        read_count_distribution[distribution[guide]] += 1
+    summe = 0
+    logging.info(" Writing read count distribution to %s" % count_dist_output)
+    with open(count_dist_output, "w") as writefile:
+        for occurence in sorted(read_count_distribution.items(), key=operator.itemgetter(0)):
+            logging.info(" %12d: %12d (%.5f%%)" % (occurence[0], occurence[1], occurence[1] / (valid_guides / 100.0)))
+            summe += occurence[1]
+            writefile.write("%d\t%d\n" % (occurence[0], occurence[1]))
+    logging.info(" %12s: %12d" % ("total", summe))
+
+
+def check_otgw_pattern(cutadapt_output, output, count_dist_output, length, plot_file):
+    '''Determine the number of reads in a trimmed sequencing file that match the oTGW oligonucleotide pattern.
+       Output is written to output, plots are written to plot_file, read counts are written to count_dist_output.
+    '''
+
+    logging.info("Counting pattern of length %d in %s" % (length, cutadapt_output))
+    distribution = Counter()
+
+    with open(cutadapt_output) as infile:
+        c = 1
+        for line in tqdm(infile, total=get_num_lines(cutadapt_output)):
+            if c == 1:
+                c += 1
+            elif c == 2:
+                guide = line.rstrip()[-length:]
+                if is_otgw(guide):
+                    distribution[guide] += 1
+                c += 1
+            elif c == 3:
+                c += 1
+            elif c == 4:
+                c = 1
+    valid_guides = len(distribution)
+    logging.info(" Writing %d entries to %s" % (valid_guides, output))
+
+    N = len(distribution)
+
+    z = sorted([distribution[i] for i in distribution], reverse=True)
+    x = [i / N for i in z]
+
+    S = sum(x)
+    data_normalized = [x[k] / S for k in range(N)]
+    y = list(numpy.cumsum(data_normalized))
+    for i in range(0, 10):
+        print z[i], x[i], data_normalized[i], y[i]
+    print "..."
+    for i in range(len(y) - 10, len(y)):
+        print z[i], x[i], data_normalized[i], y[i]
+
+    x_values = [i * (1.0 / N) for i in range(0, len(y))]
+
+    pdf_file = plt.figure()
+    auc = trapz(y, x_values)
+    logging.info("Area under the curve: %f", auc)
+
+    cv = numpy.std(y) / numpy.mean(y)
+    logging.info("Coefficient of variation: %f" % cv)
+
+    plt.scatter([x_values[::10000]], [y[::10000]], s=5)
+    plt.plot([x_values[::10000]], [y[::10000]], linestyle="-")
+    plt.title("title, AUC = %f" % auc)
+    plt.xlabel("gRNAs ranked by abundance")
+    plt.ylabel("cumulative fraction of NGS reads represented")
+    logging.info("saving plot ...")
+    pdf_file.savefig(plot_file)
+
+    logging.info(" Printing count distribution ...")
+    read_count_distribution = Counter()
+    for guide in distribution:
+        read_count_distribution[distribution[guide]] += 1
+    summe = 0
+    logging.info(" Writing read count distribution to %s" % count_dist_output)
+    with open(count_dist_output, "w") as writefile:
+        for occurence in sorted(read_count_distribution.items(), key=operator.itemgetter(0)):
+            logging.info(" %12d: %12d (%.5f%%)" % (occurence[0], occurence[1], occurence[1] / (valid_guides / 100.0)))
+            summe += occurence[1]
+            writefile.write("%d\t%d\n" % (occurence[0], occurence[1]))
+    logging.info(" %12s: %12d" % ("total", summe))
